@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net5.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="FunogramHelpers.fs" />
+    <Compile Include="ImageMasking.fs" />
+    <Compile Include="FileManagement.fs" />
+    <Compile Include="UserState.fs" />
+    <Compile Include="Config.fs" />
+    <Compile Include="ImageMaskBot.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="FSharp.Data" Version="4.1.1" />
+    <PackageReference Include="funogram" Version="2.0.3" />
+    <PackageReference Include="Funogram.telegram" Version="4.4.2.3" />
+    <PackageReference Include="SixLabors.ImageSharp" Version="1.0.3" />
+    <PackageReference Include="System.Data.SQLite" Version="1.0.113.7" />
+  </ItemGroup>
+</Project>
