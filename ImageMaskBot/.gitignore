@@ -2,8 +2,6 @@
 *.png
 *.sqlite
 .fake
-.ionide
-.vscode
 bin
 config.json
 data

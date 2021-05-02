@@ -105,8 +105,8 @@ let getPhotoBytes ctx f (photo: PhotoSize) =
     result
 
 let resetBot ctx user =
-    deleteImage ctx.Database user ImageType.Base
-    deleteImage ctx.Database user ImageType.Mask
+    deleteImage ctx.Database user ImageType.Base FileManagement.deleteGuid
+    deleteImage ctx.Database user ImageType.Mask FileManagement.deleteGuid
 
 let updateArrived ctx (update: UpdateContext) =
     match FunogramHelpers.getUser update with

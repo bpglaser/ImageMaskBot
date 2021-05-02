@@ -1,0 +1,4 @@
+*.sqlite
+.fake
+.ionide
+.vscode

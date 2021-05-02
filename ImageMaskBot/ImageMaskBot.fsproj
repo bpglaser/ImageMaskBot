@@ -5,8 +5,8 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="FunogramHelpers.fs" />
-    <Compile Include="ImageMasking.fs" />
     <Compile Include="FileManagement.fs" />
+    <Compile Include="ImageMasking.fs" />
     <Compile Include="UserState.fs" />
     <Compile Include="Config.fs" />
     <Compile Include="ImageMaskBot.fs" />

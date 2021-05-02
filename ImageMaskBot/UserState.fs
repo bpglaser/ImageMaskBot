@@ -40,7 +40,7 @@ type UserImage =
       Image: Image
       Type: ImageType }
 
-let private createTables (connection: SQLiteConnection) =
+let createTables (connection: SQLiteConnection) =
     let sql = new SQLiteCommand(connection)
     sql.CommandText <- "CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,7 +73,26 @@ let private createTables (connection: SQLiteConnection) =
     )"
     sql.ExecuteNonQuery() |> ignore
 
-let private insertUser (db: Database) (user: FunogramUser) =
+let private readUserImage (reader: SQLiteDataReader) =
+    { Id = reader.GetInt64(0)
+      User =
+          { Id = reader.GetInt64(1)
+            UserId = reader.GetInt64(2)
+            Username = reader.GetString(3) }
+      Image =
+          { Id = reader.GetInt64(4)
+            Guid = reader.GetGuid(5) }
+      Type = reader.GetInt32(6) |> enum }
+
+let init() =
+    let connection = new SQLiteConnection("Data Source=state.sqlite;Version=3;")
+    connection.Open()
+    createTables connection
+    connection
+
+let cleanup (db: Database) = db.Close()
+
+let insertUser (db: Database) (user: FunogramUser) =
     let sql = db.CreateCommand()
     sql.CommandText <- "INSERT OR IGNORE INTO users(userid, username)
         VALUES (@userid, @username);
@@ -98,13 +117,39 @@ let private insertUser (db: Database) (user: FunogramUser) =
           UserId = user.Id
           Username = user.Username }
 
-let init() =
-    let connection = new SQLiteConnection("Data Source=state.sqlite;Version=3;")
-    connection.Open()
-    createTables connection
-    connection
+let getUsers (db: Database) =
+    let sql = db.CreateCommand()
+    sql.CommandText <- "SELECT id, userid, username FROM users"
+    let reader = sql.ExecuteReader()
+    Seq.unfold (fun (state: SQLiteDataReader) ->
+        if state.Read() then
+            Some
+                ({ Id = reader.GetInt64(0)
+                   UserId = reader.GetInt64(1)
+                   Username = reader.GetString(2) }, state)
+        else
+            None) reader
 
-let cleanup (db: Database) = db.Close()
+let getUserStates (db: Database) =
+    let sql = db.CreateCommand()
+    sql.CommandText <- "SELECT us.id, us.state, u.id, u.userid, u.username
+        FROM userstates us
+        JOIN users u on us.user = u.id"
+    Seq.unfold (fun (reader: SQLiteDataReader) ->
+        if reader.Read() then
+            let user =
+                { Id = reader.GetInt64(2)
+                  UserId = reader.GetInt64(3)
+                  Username = reader.GetString(4) }
+
+            let userState =
+                { Id = reader.GetInt64(0)
+                  User = user
+                  State = reader.GetInt32(1) |> enum }
+
+            Some(userState, reader)
+        else
+            None) (sql.ExecuteReader())
 
 let getUserState (db: Database) (userId: int64) =
     let sql = db.CreateCommand()
@@ -143,28 +188,12 @@ let setUserState (db: Database) user (state: State) =
     sql.Prepare()
     sql.ExecuteNonQuery() |> ignore
 
-let private getUserImages (db: Database) user =
-    let sql = db.CreateCommand()
-    sql.CommandText <- "SELECT uuid FROM bases b WHERE b.user = @userkey"
-
-    let userKeyParam = new SQLiteParameter("@userkey", DbType.Int64)
-    userKeyParam.Value <- user.Id
-    sql.Parameters.Add(userKeyParam) |> ignore
-
-    sql.Prepare()
-    let reader = sql.ExecuteReader()
-    if not reader.HasRows then
-        None
-    else
-        reader.Read() |> ignore
-        reader.GetGuid(0).ToString() |> Some
-
-let deleteImage (db: Database) (user: FunogramUser) (imageType: ImageType) =
+let deleteImage (db: Database) (user: FunogramUser) (imageType: ImageType) deleteGuid =
     let user = insertUser db user
     let sql = db.CreateCommand()
     sql.CommandText <- "SELECT uuid FROM userimages ui
         JOIN images i ON ui.image = i.id
-        WHERE iu.user = @userKey
+        WHERE ui.user = @userKey
         AND ui.type = @imageType"
 
     let userKeyParam = SQLiteParameter("@userKey", DbType.Int64)
@@ -177,16 +206,13 @@ let deleteImage (db: Database) (user: FunogramUser) (imageType: ImageType) =
 
     sql.Prepare()
     let reader = sql.ExecuteReader()
-    while reader.HasRows do
-        reader.Read() |> ignore
-        reader.GetGuid(0).ToString()
-        |> FileManagement.deleteGuid
+    while reader.Read() do
+        reader.GetGuid(0).ToString() |> deleteGuid
 
     let sql = db.CreateCommand()
-    sql.CommandText <- "DELETE FROM userimages ui
-        WHERE ui.user = @userKey
-        AND ui.type = @imageType
-        "
+    sql.CommandText <- "DELETE FROM userimages
+        WHERE user = @userKey
+        AND type = @imageType"
 
     let userKeyParam = SQLiteParameter("@userKey", DbType.Int64)
     userKeyParam.Value <- user.Id
@@ -198,3 +224,42 @@ let deleteImage (db: Database) (user: FunogramUser) (imageType: ImageType) =
 
     sql.Prepare()
     sql.ExecuteNonQuery() |> ignore
+
+let insertImage (db: Database) (user: FunogramUser) (guid: Guid) (imageType: ImageType) deleteGuid =
+    deleteImage db user imageType deleteGuid
+    let user = insertUser db user
+    let sql = db.CreateCommand()
+    sql.CommandText <- "INSERT INTO images(uuid) VALUES (@uuid);
+        INSERT INTO userimages(user, image, type)
+            SELECT @userid, id, @type FROM images WHERE uuid = @uuid;
+        SELECT ui.id, u.id, u.userid, u.username, i.id, i.uuid, ui.type FROM userimages ui
+            JOIN users u ON ui.user = u.id
+            JOIN images i ON ui.image = i.id
+            WHERE i.uuid = @uuid"
+    let uuidParam = SQLiteParameter("@uuid", DbType.String)
+    uuidParam.Value <- guid.ToString()
+    sql.Parameters.Add(uuidParam) |> ignore
+    let useridParam = SQLiteParameter("@userid", DbType.Int32)
+    useridParam.Value <- user.Id
+    sql.Parameters.Add(useridParam) |> ignore
+    let typeParam = SQLiteParameter("@type", DbType.Int32)
+    typeParam.Value <- imageType |> int
+    sql.Parameters.Add(typeParam) |> ignore
+    sql.Prepare()
+    let reader = sql.ExecuteReader()
+    reader.Read() |> ignore
+    readUserImage reader
+
+let getUserImages (db: Database) (user: FunogramUser) =
+    let sql = db.CreateCommand()
+    sql.CommandText <- "SELECT ui.id, u.id, u.userid, u.username, i.id, i.uuid, ui.type
+        FROM userimages ui
+        JOIN users u ON ui.user = u.id
+        JOIN images i ON ui.image = i.id
+        WHERE u.userid = @userid"
+    let useridParam = SQLiteParameter("@userid", DbType.Int32)
+    useridParam.Value <- user.Id
+    sql.Parameters.Add(useridParam) |> ignore
+    sql.Prepare()
+    Seq.unfold (fun (reader: SQLiteDataReader) ->
+        if reader.Read() then Some(readUserImage reader, reader) else None) (sql.ExecuteReader())
