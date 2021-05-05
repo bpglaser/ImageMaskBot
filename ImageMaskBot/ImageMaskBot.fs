@@ -13,6 +13,7 @@ open Funogram.Api
 open Funogram.Telegram.Api
 
 open SixLabors.ImageSharp
+open System.Net.Http
 
 type Context =
     { Config: BotConfig
@@ -46,9 +47,8 @@ let sendImage ctx (update: UpdateContext) (bytes: byte array) =
             return result |> Result.mapError BotError
     }
 
-let download (address: string) =
-    use client = new WebClient()
-    let bytes = client.DownloadData(address)
+let download (client: HttpClient) (address: string) =
+    let bytes = client.GetByteArrayAsync(address) |> Async.AwaitTask |> Async.RunSynchronously
     let fileName = address.Split('/') |> Array.last
     IO.File.WriteAllBytes(fileName, bytes)
     bytes
@@ -66,9 +66,9 @@ let handlePhotoFile ctx update (bytes: byte array) =
             let! bytes = bytes
             return! sendImage ctx update bytes }
 
-let handlePhotos ctx update (photo: PhotoSize) =
+let handlePhotos ctx update client (photo: PhotoSize) =
     photo
-    |> FunogramHelpers.getPhotoBytes ctx.Config
+    |> FunogramHelpers.getPhotoBytes ctx.Config client
     |> Async.RunSynchronously
     |> Result.mapError BotError
     |> Result.bind (handlePhotoFile ctx update >> Async.RunSynchronously)
@@ -87,7 +87,7 @@ let sendBasePrompt ctx update =
     |> Async.RunSynchronously
     |> ignore
 
-let getPhotoBytes ctx f (photo: PhotoSize) =
+let getPhotoBytes ctx client f (photo: PhotoSize) =
     let result = 
         photo.FileId
         |> getFile
@@ -98,7 +98,7 @@ let getPhotoBytes ctx f (photo: PhotoSize) =
     | Ok file ->
         file.FilePath
         |> Option.map (sprintf "https://api.telegram.org/file/bot%s/%s" ctx.Config.Token)
-        |> Option.map download
+        |> Option.map (download client)
         |> Option.iter f
         |> ignore
     | Error _ -> ()
@@ -108,7 +108,7 @@ let resetBot ctx user =
     deleteImage ctx.Database user ImageType.Base FileManagement.deleteGuid
     deleteImage ctx.Database user ImageType.Mask FileManagement.deleteGuid
 
-let updateArrived ctx (update: UpdateContext) =
+let updateArrived ctx client (update: UpdateContext) =
     match FunogramHelpers.getUser update with
     | None -> ()
     | Some user ->
@@ -120,10 +120,10 @@ let updateArrived ctx (update: UpdateContext) =
         | State.PromptedForBase ->
             let onPhotoBytes bytes =
                 setUserState ctx.Database user State.BaseSet
-            photoMessage (getPhotoBytes ctx onPhotoBytes) update |> ignore
+            photoMessage (getPhotoBytes ctx client onPhotoBytes) update |> ignore
         | _ -> ()
         processCommands update [
-            photoMessage (handlePhotos ctx update)
+            photoMessage (handlePhotos ctx update client)
             cmd "/help" (fun _ ->
                   sendMessage update.Update.Message.Value.Chat.Id helpMessage 
                   |> api ctx.Config
@@ -138,6 +138,7 @@ let updateArrived ctx (update: UpdateContext) =
 
 let run (db: Database) (config: TelegramConfig) =
     async {
+        use client = new HttpClient()
         let config = { defaultConfig with Token = config.Token }
         let! ``base`` = ImageMasking.loadImage "base.png"
         let! mask = ImageMasking.loadImage "mask.png"
@@ -152,5 +153,5 @@ let run (db: Database) (config: TelegramConfig) =
               Dimensions = dimensions
               Database = db }
         printfn "%A" ctx
-        do! startBot config (updateArrived ctx) None
+        do! startBot config (updateArrived ctx client) None
     }
